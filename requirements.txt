@@ -1,0 +1,7 @@
+gymnasium==0.29.1
+imageio==2.36.0
+jax==0.4.35
+pygame==2.6.1
+stable_baselines3==2.3.2
+torch==2.5.1
+tqdm==4.67.0
