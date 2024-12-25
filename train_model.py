@@ -60,7 +60,7 @@ class RewardLoggingCallback(BaseCallback):
 
         # Log individual reward components
         self.logger.record("reward/distance_reward", env.distance_reward)
-        self.logger.record("reward/heading_reward", env.heading_reward)
+        # self.logger.record("reward/heading_reward", env.heading_reward)
         self.logger.record("reward/target_bonus", env.target_bonus)
         self.logger.record("reward/truncation_penalty", env.truncation_penalty)
         self.logger.record("reward/thruster_used", env.thruster_used)

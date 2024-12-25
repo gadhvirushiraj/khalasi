@@ -58,8 +58,9 @@ class ASVNavEnv(gym.Env):
         self.headless = headless  # Add a headless attribute
         self.thrust_mag = 0.5
 
+        # only forward thrust
         self.action_space = spaces.Box(
-            low=np.array([-self.thrust_mag, -self.thrust_mag]),
+            low=np.array([0, 0]),
             high=np.array([self.thrust_mag, self.thrust_mag]),
             dtype=np.float32,
         )
@@ -274,64 +275,62 @@ class ASVNavEnv(gym.Env):
             float: The reward for the agent.
         """
 
-        # Calculate the change in distance to the target
+        # Bonus for reaching the target
+        self.target_bonus = 1000 if target_reached else 0
 
-        # do exponential decay of distance reward, over entire training time
+        # Calculate the change in distance to the target
         pre_distance = math.sqrt(
             (self.pre_x - self.target_x) ** 2 + (self.pre_y - self.target_y) ** 2
         )
         current_distance = math.sqrt(
             (self.x - self.target_x) ** 2 + (self.y - self.target_y) ** 2
         )
-        self.distance_reward = 5 * (pre_distance - current_distance)
-
-        # Bonus for reaching the target
-        self.target_bonus = 300 if target_reached else 0
+        self.distance_reward = pre_distance - current_distance
 
         # Penalty for thruster usage
         self.thruster_used = abs(self.thruster1) + abs(self.thruster2)
-        self.thruster_penalty = -5 * self.thruster_used
+        self.thruster_penalty = -2 * self.thruster_used
 
-        # Reward if boat heading is aligned with the local flow field (avg velocity around the boat in grid space of 20x20)
-        ux_region = self.flow_field.ux[
-            max(0, int(self.y) - 10) : min(
-                self.flow_field.ux.shape[0], int(self.y) + 10
-            ),
-            max(0, int(self.x) - 10) : min(
-                self.flow_field.ux.shape[1], int(self.x) + 10
-            ),
-        ]
-        uy_region = self.flow_field.uy[
-            max(0, int(self.y) - 10) : min(
-                self.flow_field.uy.shape[0], int(self.y) + 10
-            ),
-            max(0, int(self.x) - 10) : min(
-                self.flow_field.uy.shape[1], int(self.x) + 10
-            ),
-        ]
-        if ux_region.size > 0 and uy_region.size > 0:
-            # angle with y-axis
-            avg_flow_field_dir = math.atan2(ux_region.mean(), uy_region.mean())
-        else:
-            avg_flow_field_dir = 0
+        # # Reward if boat heading is aligned with the local flow field (avg velocity around the boat in grid space of 20x20)
+        # ux_region = self.flow_field.ux[
+        #     max(0, int(self.y) - 10) : min(
+        #         self.flow_field.ux.shape[0], int(self.y) + 10
+        #     ),
+        #     max(0, int(self.x) - 10) : min(
+        #         self.flow_field.ux.shape[1], int(self.x) + 10
+        #     ),
+        # ]
+        # uy_region = self.flow_field.uy[
+        #     max(0, int(self.y) - 10) : min(
+        #         self.flow_field.uy.shape[0], int(self.y) + 10
+        #     ),
+        #     max(0, int(self.x) - 10) : min(
+        #         self.flow_field.uy.shape[1], int(self.x) + 10
+        #     ),
+        # ]
+        # if ux_region.size > 0 and uy_region.size > 0:
+        #     # angle with y-axis
+        #     avg_flow_field_dir = math.atan2(ux_region.mean(), uy_region.mean())
+        # else:
+        #     avg_flow_field_dir = 0
 
-        heading_diff = abs(self.angle_rad - avg_flow_field_dir)
-        # heading must be between 0 and pi
-        if heading_diff > math.pi:
-            heading_diff = 2 * math.pi - heading_diff
+        # heading_diff = abs(self.angle_rad - avg_flow_field_dir)
+        # # heading must be between 0 and pi
+        # if heading_diff > math.pi:
+        #     heading_diff = 2 * math.pi - heading_diff
 
-        # if heading_diff greater than +/- 45 degrees, give a penalty
-        if heading_diff > math.pi / 4:
-            self.heading_reward = -10
+        # # if heading_diff greater than +/- 45 degrees, give a penalty
+        # if heading_diff > math.pi / 4:
+        #     self.heading_reward = -10
 
         # Penalty if truncated before reaching the target
-        self.truncation_penalty = -150 if truncated and not target_reached else 0
+        self.truncation_penalty = -500 if truncated and not target_reached else 0
 
         # Combine all rewards and penalties
         reward = (
             self.distance_reward
             + self.target_bonus
-            + self.heading_reward
+            # + self.heading_reward
             + self.truncation_penalty
             + self.thruster_penalty
         )
