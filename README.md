@@ -1,6 +1,5 @@
-khalasi : Energy Efficient Navigation for ASVs in Turbulent Vortical Fields 🌊
+# khalasi : Energy Efficient Navigation for ASVs in Turbulent Vortical Fields 🌊
 
----
 
 **about the project:**
 
@@ -20,3 +19,10 @@ This project aims to develop a **Deep Reinforcement Learning (DRL)** strategy fo
 
 ---
 
+**what ideal energy-efficient path should look like:**
+
+<img src="./assets/ideal_path.png" width="300">
+
+Observe how the ASV takes advantage of the flow field to minimize resource usage while reaching its destination. The objective is to reduce resource consumption, with no time constraints on reaching the goal.
+
+---
