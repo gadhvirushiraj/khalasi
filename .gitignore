@@ -1,4 +1,9 @@
 vortex_init_states.npy
 random_timesteps.txt
 temp/
+gifs/
 gifs-train*/
+logs/
+__pycache__/
+.vscode/
+.DS_Store
