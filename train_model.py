@@ -2,10 +2,33 @@ import os
 import numpy as np
 import imageio
 from stable_baselines3 import PPO
+from sb3_contrib import RecurrentPPO
 from stable_baselines3.common.env_checker import check_env
 from stable_baselines3.common.callbacks import BaseCallback
 from asv_env import ASVNavEnv
 import torch  # Ensure PyTorch is imported
+
+
+class CheckpointCallback(BaseCallback):
+    """
+    Callback for saving model checkpoints at regular intervals.
+    """
+
+    def __init__(self, save_freq: int, save_dir: str = "./checkpoints", verbose=0):
+        super(CheckpointCallback, self).__init__(verbose)
+        self.save_freq = save_freq
+        self.save_dir = save_dir
+        os.makedirs(self.save_dir, exist_ok=True)  # Ensure directory exists
+
+    def _on_step(self) -> bool:
+        if self.n_calls % self.save_freq == 0:  # Check if step is multiple of save_freq
+            checkpoint_path = os.path.join(
+                self.save_dir, f"model_step_{self.n_calls}.zip"
+            )
+            self.model.save(checkpoint_path)
+            if self.verbose > 0:
+                print(f"Saved checkpoint: {checkpoint_path}")
+        return True
 
 
 class SaveGifCallback(BaseCallback):
@@ -32,7 +55,7 @@ class SaveGifCallback(BaseCallback):
                 trun = False
                 # Run one episode to capture frames
                 while not done and not trun:
-                    action, _ = self.model.predict(obs_img, deterministic=True)
+                    action, _ = self.model.predict(obs_img)
                     frame = self.env.render(return_img=True)
                     frames.append(frame)
                     obs_img, _, done, trun, _ = self.env.step(action)
@@ -46,39 +69,49 @@ class SaveGifCallback(BaseCallback):
 
 
 class RewardLoggingCallback(BaseCallback):
+    """
+    Callback of Logging the Rewards.
+    """
+
     def __init__(self, verbose=0):
         super(RewardLoggingCallback, self).__init__(verbose)
 
     def _on_step(self) -> bool:
-        """
-        Called at each step to log rewards and other metrics.
-        """
-        # Access the unwrapped environment
-        env = (
-            self.locals["env"].envs[0].unwrapped
-        )  # Access the underlying unwrapped environment
+        env = self.locals["env"].envs[0].unwrapped
 
         # Log individual reward components
         self.logger.record("reward/distance_reward", env.distance_reward)
-        # self.logger.record("reward/heading_reward", env.heading_reward)
+        self.logger.record("reward/heading_reward", env.heading_reward)
         self.logger.record("reward/target_bonus", env.target_bonus)
         self.logger.record("reward/truncation_penalty", env.truncation_penalty)
         self.logger.record("reward/thruster_used", env.thruster_used)
         self.logger.record("reward/thruster_penalty", env.thruster_penalty)
+
+        # Log goal-reached event
+        if getattr(env, "goal_reached", False):
+            self.logger.record("event/goal_reached", 1)
+        else:
+            self.logger.record("event/goal_reached", 0)
 
         return True
 
 
 def main():
     """
-    Main function to train the model.
+    Main function to train the model with CNN-LSTM policy.
     """
     training_steps = 250000
     env = ASVNavEnv(training_steps=training_steps, headless=True)
 
-    print("Checking the environment ....")
+    print(
+        " ---------------------- Checking the environment ---------------------- ",
+        end="\n",
+    )
     check_env(env, warn=True)
-    print("Environment is ALL GOOD!")
+    print(
+        " ---------------------- Environment is ALL GOOD! ---------------------- ",
+        end="\n",
+    )
 
     log_dir = "./logs/"
 
@@ -86,21 +119,38 @@ def main():
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Using device: {device}")
 
-    # Create the PPO model with the appropriate device
+    # Use the CnnLstmPolicy with RecurrentPPO
+    # model = RecurrentPPO(
+    #     "CnnLstmPolicy",
+    #     env,
+    #     verbose=1,
+    #     tensorboard_log=log_dir,
+    #     device=device,
+    #     learning_rate=1e-4,
+    #     n_steps=1024,  # Number of steps per rollout (adjust for sequence length)
+    #     batch_size=64,  # Adjust based on memory
+    #     ent_coef=0.01,  # Entropy coefficient for exploration
+    # )
+
     model = PPO("CnnPolicy", env, verbose=1, tensorboard_log=log_dir, device=device)
 
-    # to add checkpoint and eval callbacks
-
+    # Create directories for outputs
     gif_dir = "./gifs"
+    checkpoint_dir = "./checkpoints"
     os.makedirs(gif_dir, exist_ok=True)
+    os.makedirs(checkpoint_dir, exist_ok=True)
+
+    # Initialize callbacks
     save_gif_callback = SaveGifCallback(env, save_freq=50, gif_dir=gif_dir)
     reward_logging_callback = RewardLoggingCallback()
+    checkpoint_callback = CheckpointCallback(save_freq=50000, save_dir=checkpoint_dir)
 
+    # Start training
     model.learn(
         total_timesteps=training_steps,
-        callback=[save_gif_callback, reward_logging_callback],
+        callback=[save_gif_callback, reward_logging_callback, checkpoint_callback],
     )
-    model.save("ppo_asv_navigation-ppo2")
+    model.save("ppo_asv_navigation")
 
 
 if __name__ == "__main__":

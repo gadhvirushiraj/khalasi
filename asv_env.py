@@ -6,13 +6,14 @@ import io
 import math
 import random
 
+import matplotlib
 import numpy as np
 import cmasher as cmr
 from PIL import Image
 import jax.numpy as jnp
 import gymnasium as gym
+from matplotlib import cm
 from gymnasium import spaces
-import matplotlib
 
 import matplotlib.pyplot as plt
 from matplotlib.gridspec import GridSpec
@@ -60,7 +61,7 @@ class ASVNavEnv(gym.Env):
 
         # only forward thrust
         self.action_space = spaces.Box(
-            low=np.array([0, 0]),
+            low=np.array([-self.thrust_mag / 2, -self.thrust_mag / 2]),
             high=np.array([self.thrust_mag, self.thrust_mag]),
             dtype=np.float32,
         )
@@ -110,10 +111,9 @@ class ASVNavEnv(gym.Env):
 
         self.thruster1 = 0
         self.thruster2 = 0
-        self.alpha = 1
 
         self.x, self.y = self.spawn_boat()
-        self.target_x, self.target_y = self.spawn_target()
+        self.target_x, self.target_y = self.spawn_target((self.x, self.y))
         self.angle_rad = random.uniform(-math.pi, math.pi)
 
         self.v_x = np.sin(self.angle_rad) * self.v
@@ -124,7 +124,8 @@ class ASVNavEnv(gym.Env):
 
     def generate_obs_img(self):
         """
-        Generates an observation image for the agent.
+        Generates an observation image for the agent with streamlines color-coded based on flow velocity magnitude.
+        The agent's dot is color-coded based on its speed, normalized to the flow velocity range.
 
         Returns:
             np.array: The observation image.
@@ -133,6 +134,7 @@ class ASVNavEnv(gym.Env):
         obs_size, padding = 20, 10
         x_center, y_center = int(self.x), int(self.y)
 
+        # Pad the flow field for boundary handling
         u_field_extended = np.pad(
             self.flow_field.ux, pad_width=padding, mode="constant", constant_values=0
         )
@@ -140,6 +142,7 @@ class ASVNavEnv(gym.Env):
             self.flow_field.uy, pad_width=padding, mode="constant", constant_values=0
         )
 
+        # Extract local flow field around the agent
         x_start = max(0, x_center - obs_size // 2 + padding)
         y_start = max(0, y_center - obs_size // 2 + padding)
         x_end = min(u_field_extended.shape[1], x_center + obs_size // 2 + padding)
@@ -149,38 +152,29 @@ class ASVNavEnv(gym.Env):
         x, y = np.arange(0, u_field.shape[1]), np.arange(0, u_field.shape[0])
         X, Y = np.meshgrid(x, y)
 
-        # plot the flow field (streamlines plot)
+        # Calculate velocity magnitudes
+        flow_magnitude = np.sqrt(u_field**2 + v_field**2)
+
+        # Plot the flow field (streamlines with color-coded velocity magnitude)
         fig, ax = plt.subplots(figsize=(2, 2))
         fig.patch.set_facecolor("white")
-        ax.streamplot(X, Y, u_field, v_field, linewidth=0.5, density=0.5)
+        streamline = ax.streamplot(
+            X,
+            Y,
+            u_field,
+            v_field,
+            color=flow_magnitude,  # Use velocity magnitude for coloring
+            linewidth=0.8,  # Fixed line width
+            density=0.5,
+            cmap=cmr.cosmic_r,
+            zorder=1,
+        )
         ax.set_xlim(0, u_field.shape[1])
         ax.set_ylim(0, u_field.shape[0])
         ax.set_aspect("equal")
         ax.axis("off")
 
-        # add agent position
-        circle_radius = 1
-        circle = plt.Circle(
-            (u_field.shape[1] // 2, u_field.shape[0] // 2),
-            circle_radius,
-            color="black",
-            fill=True,
-        )
-        ax.add_patch(circle)
-
-        # add agent heading direction (red arrow)
-        direction_length = 3
-        ax.arrow(
-            u_field.shape[1] // 2,
-            u_field.shape[0] // 2,
-            direction_length * math.sin(self.angle_rad),
-            direction_length * math.cos(self.angle_rad),
-            head_width=0.5,
-            head_length=1,
-            fc="red",
-            ec="red",
-        )
-        # add goal position
+        # Add goal position
         rel_goal_x, rel_goal_y = self.target_x - self.x, self.target_y - self.y
         goal_distance = np.linalg.norm([rel_goal_x, rel_goal_y])
         goal_angle = math.atan2(rel_goal_y, rel_goal_x)
@@ -188,28 +182,67 @@ class ASVNavEnv(gym.Env):
         goal_x_edge = int(u_field.shape[1] // 2 + goal_distance * math.cos(goal_angle))
         goal_y_edge = int(u_field.shape[0] // 2 + goal_distance * math.sin(goal_angle))
 
-        square_size = 2
+        square_size = 2.5
+        half_square_size = square_size / 2
+
+        # Adjust to ensure the square is fully inside the image
         goal_x_edge = np.clip(
-            goal_x_edge, square_size // 2, u_field.shape[1] - square_size // 2
+            goal_x_edge, half_square_size, u_field.shape[1] - half_square_size
         )
         goal_y_edge = np.clip(
-            goal_y_edge, square_size // 2, u_field.shape[0] - square_size // 2
+            goal_y_edge, half_square_size, u_field.shape[0] - half_square_size
         )
+
         ax.add_patch(
             plt.Rectangle(
-                (goal_x_edge - square_size // 2, goal_y_edge - square_size // 2),
+                (goal_x_edge - half_square_size, goal_y_edge - half_square_size),
                 square_size,
                 square_size,
                 color="red",
+                zorder=2,
             )
         )
 
-        # save the image to a buffer
+        # Add the agent's position as a color-coded dot
+        speed = np.sqrt(self.v_x**2 + self.v_y**2)
+        normalized_speed = np.clip(
+            speed / 0.25, 0, 1
+        )  # Normalize agent's speed to 0-0.3 range
+        dot_color = cmr.cosmic_r(
+            normalized_speed
+        )  # Use the same colormap for the agent
+
+        circle_radius = 1
+        circle = plt.Circle(
+            (u_field.shape[1] // 2, u_field.shape[0] // 2),
+            circle_radius,
+            color=dot_color,
+            fill=True,
+            zorder=2,
+        )
+        ax.add_patch(circle)
+
+        # Add agent heading direction (red arrow)
+        direction_length = 3
+        ax.arrow(
+            u_field.shape[1] // 2,
+            u_field.shape[0] // 2,
+            direction_length * math.sin(self.angle_rad),
+            direction_length * math.cos(self.angle_rad),
+            head_width=1,
+            head_length=2,
+            fc="red",
+            ec="red",
+            zorder=3,
+        )
+
+        # Save the image to a buffer
         buf = io.BytesIO()
         plt.savefig(buf, format="PNG", bbox_inches="tight", pad_inches=0)
         buf.seek(0)
         plt.close()
 
+        # Convert the buffer image to a numpy array
         pil_image = Image.open(buf).convert("RGB").resize((64, 64))
         image = np.array(pil_image)
 
@@ -247,13 +280,17 @@ class ASVNavEnv(gym.Env):
 
         done, target_reached = self.check_terminal_state()
         truncated = self.check_truncated()
-        reward = self.calculate_reward(target_reached, truncated)
-        info = {
-            "step": self.n_steps,
-            "truncate": truncated,
-            "reward": reward,
-            "action": action,
-        }
+        reward = self.calculate_reward(done, target_reached, truncated)
+
+        # Add custom metrics to the `info` dictionary
+        info = {}
+        info["distance_reward"] = self.distance_reward
+        info["heading_reward"] = self.heading_reward
+        info["target_bonus"] = self.target_bonus
+        info["truncation_penalty"] = self.truncation_penalty
+        info["thruster_used"] = self.thruster_used
+        info["thruster_penalty"] = self.thruster_penalty
+        info["goal_reached"] = self.goal_reached
 
         self.obs_image = self.generate_obs_img()
         if not self.headless:
@@ -264,19 +301,16 @@ class ASVNavEnv(gym.Env):
         )
         return self.obs_image, reward, done, truncated, info
 
-    def calculate_reward(self, target_reached, truncated):
+    def calculate_reward(self, done, target_reached, truncated):
         """
         Calculates the reward for the agent based on the current state of the environment.
-            - Reward based on distance to the goal
-            - Bonus reward if the target is reached
-            - Reward based on energy used by the thrusters
 
         Returns:
             float: The reward for the agent.
         """
 
         # Bonus for reaching the target
-        self.target_bonus = 1000 if target_reached else 0
+        self.target_bonus = 100 if target_reached else 0
 
         # Calculate the change in distance to the target
         pre_distance = math.sqrt(
@@ -285,52 +319,28 @@ class ASVNavEnv(gym.Env):
         current_distance = math.sqrt(
             (self.x - self.target_x) ** 2 + (self.y - self.target_y) ** 2
         )
-        self.distance_reward = pre_distance - current_distance
 
-        # Penalty for thruster usage
+        # Reward for moving closer to the target
+        if current_distance < pre_distance:
+            self.distance_reward = 5 * (pre_distance - current_distance)
+        else:
+            self.distance_reward = -5 * (current_distance - pre_distance)
+
+        # Heading reward: encourage alignment with the target direction
+        self.heading_reward = 0
+
+        # Penalty if the boat is outside the boundaries of the environment
+        self.truncation_penalty = 0
+
+        # Penalize excessive thruster usage
         self.thruster_used = abs(self.thruster1) + abs(self.thruster2)
-        self.thruster_penalty = -2 * self.thruster_used
-
-        # # Reward if boat heading is aligned with the local flow field (avg velocity around the boat in grid space of 20x20)
-        # ux_region = self.flow_field.ux[
-        #     max(0, int(self.y) - 10) : min(
-        #         self.flow_field.ux.shape[0], int(self.y) + 10
-        #     ),
-        #     max(0, int(self.x) - 10) : min(
-        #         self.flow_field.ux.shape[1], int(self.x) + 10
-        #     ),
-        # ]
-        # uy_region = self.flow_field.uy[
-        #     max(0, int(self.y) - 10) : min(
-        #         self.flow_field.uy.shape[0], int(self.y) + 10
-        #     ),
-        #     max(0, int(self.x) - 10) : min(
-        #         self.flow_field.uy.shape[1], int(self.x) + 10
-        #     ),
-        # ]
-        # if ux_region.size > 0 and uy_region.size > 0:
-        #     # angle with y-axis
-        #     avg_flow_field_dir = math.atan2(ux_region.mean(), uy_region.mean())
-        # else:
-        #     avg_flow_field_dir = 0
-
-        # heading_diff = abs(self.angle_rad - avg_flow_field_dir)
-        # # heading must be between 0 and pi
-        # if heading_diff > math.pi:
-        #     heading_diff = 2 * math.pi - heading_diff
-
-        # # if heading_diff greater than +/- 45 degrees, give a penalty
-        # if heading_diff > math.pi / 4:
-        #     self.heading_reward = -10
-
-        # Penalty if truncated before reaching the target
-        self.truncation_penalty = -500 if truncated and not target_reached else 0
+        self.thruster_penalty = 0
 
         # Combine all rewards and penalties
         reward = (
             self.distance_reward
             + self.target_bonus
-            # + self.heading_reward
+            + self.heading_reward
             + self.truncation_penalty
             + self.thruster_penalty
         )
@@ -347,7 +357,7 @@ class ASVNavEnv(gym.Env):
         if self.agent_type == "test":
             return False
 
-        return self.n_steps >= 500  # generally, set at 300 for ealrier experiments
+        return self.n_steps >= 400  # generally, set at 300 for ealrier experiments
 
     def check_terminal_state(self):
         """
@@ -362,6 +372,7 @@ class ASVNavEnv(gym.Env):
         """
         int_x = int(self.x)
         int_y = int(self.y)
+        self.goal_reached = False
 
         # Check if the boat is outside the boundaries of the environment
         if int_x < 100 or int_x >= self.WIDTH or int_y < 0 or int_y >= self.HEIGHT:
@@ -377,34 +388,38 @@ class ASVNavEnv(gym.Env):
         if (int_x - self.target_x) ** 2 + (int_y - self.target_y) ** 2 <= (
             self.RADIUS / 3
         ) ** 2:
+            self.goal_reached = True
             return True, True
 
         return False, False
 
     def spawn_boat(self):
         """
-        Spawns the boat in a random location after 1/3 of the screen width and below 1/2 of the screen height.
+        Spawns the boat in a random location before 5/6 of the screen width and below 1/2 of the screen height.
 
         Returns:
             tuple: The x and y coordinates of the boat.
         """
-
-        random_x = random.uniform(self.WIDTH / 3, self.WIDTH)
+        random_x = random.uniform(self.WIDTH / 3 + 1, 5 * self.WIDTH / 6)
         random_y = random.uniform(0, self.HEIGHT / 2)
-
         return random_x, random_y
 
-    def spawn_target(self):
+    def spawn_target(self, boat_position):
         """
-        Spawns the target in a random location after 1/3 of the screen width and above 1/2 of the screen height.
+        Spawns the target in a random location after the boat's x-coordinate
+        and above 1/2 of the screen height.
+
+        Args:
+            boat_position (tuple): The x and y coordinates of the boat.
 
         Returns:
             tuple: The x and y coordinates of the target.
         """
-
-        random_x = random.uniform(self.WIDTH / 3, self.WIDTH)
+        boat_x, _ = boat_position  # Extract boat's x-coordinate
+        random_x = random.uniform(
+            boat_x + 1, self.WIDTH
+        )  # Ensure target is ahead of the boat
         random_y = random.uniform(self.HEIGHT / 2, self.HEIGHT)
-
         return random_x, random_y
 
     def render(

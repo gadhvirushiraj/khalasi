@@ -2,8 +2,10 @@ vortex_init_states.npy
 random_timesteps.txt
 temp/
 gifs/
+checkpoints*/
 gifs-train*/
 logs/
 __pycache__/
 .vscode/
 .DS_Store
+ppo_asv_navigation.zip
